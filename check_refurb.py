@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Apple 台灣整修品監控
-目標：13 吋 MacBook Air M5 銀色（512GB）
-有新上架符合條件的商品時，透過 Telegram Bot 通知。
+可設定多組監控目標，有新上架符合任一組條件的商品時，透過 Telegram Bot 通知。
 """
 import asyncio
 import json
@@ -17,10 +16,12 @@ from playwright.async_api import async_playwright
 URL = "https://www.apple.com/tw/shop/refurbished/mac"
 SEEN_FILE = Path("seen.json")
 
-# 標題必須同時包含這些關鍵字（Apple 標題會夾雜 \xa0 不斷行空格，比對前會先正規化）
-KEYWORDS = ["13 吋", "MacBook Air", "M5", "銀色"]
-# 進一步到商品頁確認的規格關鍵字
-SPEC_KEYWORD = "512GB"
+# 監控目標清單，可以設定多組。每組的 keywords 必須同時出現在標題裡才算符合
+# （Apple 標題會夾雜 \xa0 不斷行空格，比對前會先正規化），spec 是進一步到商品頁
+# 確認的規格關鍵字，不需要就設成 ""
+TARGETS = [
+    {"keywords": ["13 吋", "MacBook Air", "M5", "銀色"], "spec": "512GB"},
+]
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -116,18 +117,22 @@ def main():
     if SEEN_FILE.exists():
         seen = set(json.loads(SEEN_FILE.read_text()))
 
-    matches = [p for p in products
-               if all(k in norm(p["title"]) for k in KEYWORDS)]
-    print(f"符合關鍵字：{len(matches)} 項")
-
+    matched_urls = set()
     new_hits = []
-    for m in matches:
-        if m["url"] in seen:
-            continue
-        if SPEC_KEYWORD and not check_spec(m["url"], SPEC_KEYWORD):
-            print(f"[skip] 非 {SPEC_KEYWORD}：{norm(m['title'])}")
-            continue
-        new_hits.append(m)
+    for target in TARGETS:
+        keywords, spec = target["keywords"], target.get("spec", "")
+        matches = [p for p in products
+                   if all(k in norm(p["title"]) for k in keywords)]
+        print(f"符合關鍵字 {keywords}：{len(matches)} 項")
+        matched_urls.update(m["url"] for m in matches)
+
+        for m in matches:
+            if m["url"] in seen or m["url"] in [h["url"] for h in new_hits]:
+                continue
+            if spec and not check_spec(m["url"], spec):
+                print(f"[skip] 非 {spec}：{norm(m['title'])}")
+                continue
+            new_hits.append(m)
 
     for m in new_hits:
         text = (f"🎯 Apple 整修品有貨了！\n\n"
@@ -139,8 +144,7 @@ def main():
         print("[notify]", norm(m["title"]))
 
     # 更新 seen：只保留「目前還在架上」的，這樣售罄後再上架會重新通知
-    current_match_urls = [m["url"] for m in matches]
-    SEEN_FILE.write_text(json.dumps(current_match_urls, ensure_ascii=False, indent=2))
+    SEEN_FILE.write_text(json.dumps(sorted(matched_urls), ensure_ascii=False, indent=2))
 
     if not new_hits:
         print("這次沒有新上架的目標商品")
