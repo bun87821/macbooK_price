@@ -21,6 +21,7 @@ SEEN_FILE = Path("seen.json")
 # 確認的規格關鍵字，不需要就設成 ""
 TARGETS = [
     {"keywords": ["13 吋", "MacBook Air", "M5", "銀色"], "spec": "512GB"},
+    {"keywords": ["13 吋", "MacBook Air", "M4", "銀色"], "spec": "512GB"},
 ]
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
