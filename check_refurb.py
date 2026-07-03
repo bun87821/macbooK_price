@@ -105,11 +105,6 @@ async def fetch_products():
 
 
 def main():
-    if os.environ.get("TEST_NOTIFY") == "true":
-        send_telegram("✅ 測試訊息：Telegram 通知設定成功！")
-        print("[test] 已發送測試訊息")
-        return
-
     products = asyncio.run(fetch_products())
     print(f"共取得 {len(products)} 項商品")
 

@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: "*/30 * * * *"   # 每 30 分鐘（UTC，對監控來說時區無所謂）
   workflow_dispatch:          # 也可以手動觸發測試
-    inputs:
-      test_notify:
-        description: "只發一則測試訊息確認 Telegram 有通，不跑完整檢查"
-        type: boolean
-        default: false
 
 permissions:
   contents: write             # 讓 workflow 能把 seen.json commit 回來
@@ -37,7 +32,6 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TEST_NOTIFY: ${{ github.event.inputs.test_notify }}
         run: python check_refurb.py
 
       - name: 更新狀態檔
