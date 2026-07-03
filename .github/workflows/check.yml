@@ -1,0 +1,43 @@
+name: Apple 整修品監控
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # 每 30 分鐘（UTC，對監控來說時區無所謂）
+  workflow_dispatch:          # 也可以手動觸發測試
+
+permissions:
+  contents: write             # 讓 workflow 能把 seen.json commit 回來
+
+concurrency:
+  group: refurb-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝 Playwright
+        run: |
+          pip install playwright
+          python -m playwright install chromium --with-deps
+
+      - name: 執行檢查
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python check_refurb.py
+
+      - name: 更新狀態檔
+        run: |
+          git config user.name "refurb-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || git commit -m "update seen.json [skip ci]"
+          git push
