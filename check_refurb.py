@@ -20,8 +20,8 @@ SEEN_FILE = Path("seen.json")
 # （Apple 標題會夾雜 \xa0 不斷行空格，比對前會先正規化），spec 是進一步到商品頁
 # 確認的規格關鍵字，不需要就設成 ""
 TARGETS = [
-    {"keywords": ["13 吋", "MacBook Air", "M5", "銀色"], "spec": "512GB"},
-    {"keywords": ["13 吋", "MacBook Air", "M4", "銀色"], "spec": "512GB"},
+    {"keywords": ["13 吋", "MacBook Air", "M5"], "spec": "512GB"},
+    {"keywords": ["13 吋", "MacBook Air", "M4"], "spec": "512GB"},
 ]
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
