@@ -17,11 +17,17 @@ URL = "https://www.apple.com/tw/shop/refurbished/mac"
 SEEN_FILE = Path("seen.json")
 
 # 監控目標清單，可以設定多組。每組的 keywords 必須同時出現在標題裡才算符合
-# （Apple 標題會夾雜 \xa0 不斷行空格，比對前會先正規化），spec 是進一步到商品頁
-# 確認的規格關鍵字，不需要就設成 ""
+# （Apple 標題會夾雜 \xa0 不斷行空格，比對前會先正規化），min_gb 是進一步到商品頁
+# 確認的最低儲存容量（GB），符合這個容量以上就算通過，不需要限制就設成 0
 TARGETS = [
-    {"keywords": ["13 吋", "MacBook Air", "M5"], "spec": "512GB"},
-    {"keywords": ["13 吋", "MacBook Air", "M4"], "spec": "512GB"},
+    {"keywords": ["13 吋", "MacBook Air", "M5"], "min_gb": 512},
+    {"keywords": ["13 吋", "MacBook Air", "M4"], "min_gb": 512},
+]
+
+# 商品頁上會出現的儲存容量標示，由大到小比對，比對到第一個出現的就當作該商品容量
+CAPACITY_SIZES_GB = [
+    ("8TB", 8192), ("4TB", 4096), ("2TB", 2048), ("1TB", 1024),
+    ("512GB", 512), ("256GB", 256), ("128GB", 128), ("64GB", 64),
 ]
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -52,13 +58,16 @@ def send_telegram(text: str):
         print("[telegram]", r.status)
 
 
-def check_spec(url: str, keyword: str) -> bool:
-    """抓商品詳細頁純 HTML，確認規格（例如 512GB）"""
+def check_min_capacity(url: str, min_gb: int) -> bool:
+    """抓商品詳細頁純 HTML，確認儲存容量是否達到 min_gb"""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=30) as r:
-            html = r.read().decode("utf-8", "ignore")
-        return keyword.lower() in html.lower()
+            html = r.read().decode("utf-8", "ignore").lower()
+        for label, gb in CAPACITY_SIZES_GB:
+            if label.lower() in html:
+                return gb >= min_gb
+        return True  # 抓不到容量標示，寧可通知，別漏掉
     except Exception as e:
         print(f"[warn] 規格確認失敗 {url}: {e}")
         return True  # 確認不了就寧可通知，別漏掉
@@ -121,7 +130,7 @@ def main():
     matched_urls = set()
     new_hits = []
     for target in TARGETS:
-        keywords, spec = target["keywords"], target.get("spec", "")
+        keywords, min_gb = target["keywords"], target.get("min_gb", 0)
         matches = [p for p in products
                    if all(k in norm(p["title"]) for k in keywords)]
         print(f"符合關鍵字 {keywords}：{len(matches)} 項")
@@ -130,8 +139,8 @@ def main():
         for m in matches:
             if m["url"] in seen or m["url"] in [h["url"] for h in new_hits]:
                 continue
-            if spec and not check_spec(m["url"], spec):
-                print(f"[skip] 非 {spec}：{norm(m['title'])}")
+            if min_gb and not check_min_capacity(m["url"], min_gb):
+                print(f"[skip] 容量不足 {min_gb}GB：{norm(m['title'])}")
                 continue
             new_hits.append(m)
 
