@@ -55,6 +55,24 @@ export default {
       }
       return new Response("ok"); // 一律回 200，避免 Telegram 重送
     }
+    // 訂閱清單，給 GitHub Actions 的排程檢查讀取。
+    // 內容與 repo 裡公開的 subscriptions.json 快照相同，所以不需要另外驗證。
+    if (request.method === "GET" && url.pathname === "/subs") {
+      const subs = {};
+      let cursor;
+      do {
+        const page = await env.SUBS.list({ prefix: "chat:", cursor });
+        for (const k of page.keys) {
+          const chat = await env.SUBS.get(k.name, "json");
+          const targets = chat?.targets || [];
+          if (targets.length > 0) subs[k.name.slice("chat:".length)] = targets;
+        }
+        cursor = page.list_complete ? null : page.cursor;
+      } while (cursor);
+      return new Response(JSON.stringify(subs), {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      });
+    }
     return new Response("Apple refurb bot worker");
   },
 };

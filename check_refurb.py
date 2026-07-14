@@ -2,14 +2,13 @@
 """
 Apple 台灣整修品監控
 訂閱指令由 Cloudflare Worker（worker/）即時處理並存進 KV；
-這支腳本每 30 分鐘從 KV 讀訂閱清單、爬整修品頁面、發上架通知。
+這支腳本每 30 分鐘跟 Worker 的 /subs 端點拿訂閱清單、爬整修品頁面、發上架通知。
 """
 import asyncio
 import json
 import os
 import re
 import sys
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -27,9 +26,8 @@ CAPACITY_SIZES_GB = [
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-CF_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")
-CF_KV_NAMESPACE_ID = os.environ.get("CF_KV_NAMESPACE_ID", "")
-CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "")
+# Worker 的訂閱清單端點（內容與 repo 裡的 subscriptions.json 快照相同）
+SUBS_URL = "https://refurb-bot.bun87821.workers.dev/subs"
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
@@ -69,53 +67,20 @@ def send_telegram(chat_id: str, text: str):
         print(f"[warn] 發送給 {chat_id} 失敗: {e}")
 
 
-def kv_request(path: str, method: str = "GET", data: bytes = None) -> str:
-    base = (f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
-            f"/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}")
-    req = urllib.request.Request(
-        base + path, data=data, method=method,
-        headers={"Authorization": f"Bearer {CF_API_TOKEN}"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode()
-
-
 def load_subscriptions() -> dict:
-    """從 Cloudflare KV 讀訂閱清單（Worker 即時寫入的），回傳 {chat_id: targets}。
-    KV 讀不到就退回 repo 裡的快照；KV 還是空的（剛部署）就用快照把舊訂閱者搬進去。"""
-    snapshot = {}
-    if SUBS_FILE.exists():
-        snapshot = json.loads(SUBS_FILE.read_text())
-
-    if not (CF_ACCOUNT_ID and CF_KV_NAMESPACE_ID and CF_API_TOKEN):
-        print("[warn] 未設定 Cloudflare KV 密鑰，改用 repo 快照")
-        return snapshot
-
+    """跟 Worker 拿訂閱清單，回傳 {chat_id: targets}；拿不到就退回 repo 裡的快照。"""
     try:
-        keys = json.loads(kv_request("/keys?prefix=chat:&limit=1000"))["result"]
-
-        if not keys and snapshot:
-            print("[info] KV 是空的，把快照裡的舊訂閱者搬進 KV")
-            for cid, targets in snapshot.items():
-                body = json.dumps(
-                    {"greeted": True, "targets": targets},
-                    ensure_ascii=False).encode()
-                kv_request(f"/values/chat:{cid}", method="PUT", data=body)
-            return snapshot
-
-        subs = {}
-        for k in keys:
-            name = k["name"]
-            chat = json.loads(kv_request("/values/" + urllib.parse.quote(name)))
-            targets = chat.get("targets", [])
-            if targets:
-                subs[name.removeprefix("chat:")] = targets
-
+        req = urllib.request.Request(SUBS_URL, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            subs = json.loads(r.read().decode())
         # 寫回快照：備援用，也方便直接在 repo 看目前有哪些訂閱
         SUBS_FILE.write_text(json.dumps(subs, ensure_ascii=False, indent=2))
         return subs
     except Exception as e:
-        print(f"[warn] 讀取 KV 失敗（{e}），改用 repo 快照")
-        return snapshot
+        print(f"[warn] 讀取訂閱清單失敗（{e}），改用 repo 快照")
+        if SUBS_FILE.exists():
+            return json.loads(SUBS_FILE.read_text())
+        return {}
 
 
 def get_capacity_gb(url: str, cache: dict):

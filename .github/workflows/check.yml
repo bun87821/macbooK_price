@@ -31,9 +31,6 @@ jobs:
       - name: 執行檢查
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: python check_refurb.py
 
       - name: 更新狀態檔
