@@ -1,4 +1,13 @@
 {
+  "1792230462": [
+    {
+      "keywords": [
+        "13吋",
+        "MacBook Air M5"
+      ],
+      "min_gb": 0
+    }
+  ],
   "5184782634": [
     {
       "keywords": [
@@ -79,6 +88,21 @@
         "M4"
       ],
       "min_gb": 512
+    }
+  ],
+  "8973760597": [
+    {
+      "keywords": [
+        "16吋",
+        "MacBook Pro"
+      ],
+      "min_gb": 0
+    },
+    {
+      "keywords": [
+        "MacBook Pro"
+      ],
+      "min_gb": 0
     }
   ]
 }
