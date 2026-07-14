@@ -6,4 +6,4 @@ compatibility_date = "2026-01-01"
 #   wrangler kv namespace create SUBS
 [[kv_namespaces]]
 binding = "SUBS"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "d88ab0de84104a9f9946e4eaafd9107d"
