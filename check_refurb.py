@@ -68,6 +68,16 @@ def norm(s: str) -> str:
     return s.replace("\xa0", " ").replace(" ", " ")
 
 
+def match_key(s: str) -> str:
+    """比對用的正規化：去掉所有空白、轉小寫，讓「13吋」也能對到「13 吋」"""
+    return re.sub(r"\s+", "", norm(s)).lower()
+
+
+def title_matches(title: str, keywords: list) -> bool:
+    key = match_key(title)
+    return all(match_key(k) in key for k in keywords)
+
+
 def send_telegram(chat_id: str, text: str):
     if not TG_TOKEN or not chat_id:
         print("[warn] 未設定 Telegram Bot Token 或 chat_id，略過通知")
@@ -152,6 +162,10 @@ def process_commands(subs: dict) -> bool:
                 continue
             keywords, min_gb = parsed
             targets = subs.setdefault(chat_id, [])
+            if any(t["keywords"] == keywords and t.get("min_gb", 0) == min_gb
+                   for t in targets):
+                send_telegram(chat_id, "這組條件已經訂閱過了，用 /list 查看")
+                continue
             if len(targets) >= MAX_TARGETS_PER_CHAT:
                 send_telegram(chat_id, f"已達上限（{MAX_TARGETS_PER_CHAT} 組），請先用 /unwatch 移除一些")
                 continue
@@ -280,7 +294,7 @@ def main():
         for target in targets:
             keywords, min_gb = target["keywords"], target.get("min_gb", 0)
             matches = [p for p in products
-                       if all(k in norm(p["title"]) for k in keywords)]
+                       if title_matches(p["title"], keywords)]
             matched_urls.update(m["url"] for m in matches)
 
             for m in matches:
