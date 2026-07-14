@@ -44,6 +44,24 @@ HELP_TEXT = (
     f"每人最多可設定 {MAX_TARGETS_PER_CHAT} 組條件。"
 )
 
+WELCOME_TEXT = (
+    "👋 歡迎使用 Apple 整修品監控 Bot！\n\n"
+    "這個 Bot 每 30 分鐘檢查一次 Apple 台灣官網的 Mac 整修品區，"
+    "有符合你條件的商品「新上架」時，會主動傳訊息通知你。\n\n"
+    "📖 快速上手：\n"
+    "1️⃣ 用 /watch 訂閱條件，關鍵字用逗號分隔，商品標題要同時包含所有關鍵字才算符合：\n"
+    "　　/watch 13 吋,MacBook Air,M5\n"
+    "2️⃣ 想限制最低容量就加上 min=容量GB：\n"
+    "　　/watch 13 吋,MacBook Air,M5 min=512\n"
+    "　　（512GB、1TB、2TB 都會通知，256GB 不會）\n"
+    "3️⃣ 用 /list 查看訂閱、/unwatch 編號 移除訂閱\n\n"
+    "💡 小提醒：\n"
+    f"• 每人最多 {MAX_TARGETS_PER_CHAT} 組條件\n"
+    "• 同一台商品只會通知一次，售罄下架後若再上架會重新通知\n"
+    "• 指令是排程處理的，回覆最多可能要等 30 分鐘，不是壞掉喔\n\n"
+    "隨時傳 /help 可以再看一次指令說明。"
+)
+
 
 def norm(s: str) -> str:
     """把不斷行空格換成一般空格，方便關鍵字比對"""
@@ -98,9 +116,11 @@ def parse_watch_args(text: str):
 
 def process_commands(subs: dict) -> bool:
     """處理使用者傳來的指令，原地更新 subs。回傳 subs 是否有變更。"""
-    offset = 0
+    state = {}
     if OFFSET_FILE.exists():
-        offset = json.loads(OFFSET_FILE.read_text()).get("offset", 0)
+        state = json.loads(OFFSET_FILE.read_text())
+    offset = state.get("offset", 0)
+    greeted = set(state.get("greeted", []))
 
     updates = get_updates(offset)
     if not updates:
@@ -115,8 +135,15 @@ def process_commands(subs: dict) -> bool:
         if not chat_id or not text:
             continue
 
+        # 第一次互動的人，不管傳什麼都先送一份使用說明書
+        first_contact = chat_id not in greeted
+        if first_contact:
+            greeted.add(chat_id)
+            send_telegram(chat_id, WELCOME_TEXT)
+
         if text in ("/start", "/help"):
-            send_telegram(chat_id, HELP_TEXT)
+            if not first_contact:  # 剛剛才送過說明書就不重複
+                send_telegram(chat_id, HELP_TEXT)
 
         elif text.startswith("/watch"):
             parsed = parse_watch_args(text[len("/watch"):].strip())
@@ -155,9 +182,10 @@ def process_commands(subs: dict) -> bool:
                 send_telegram(chat_id, "目前訂閱的條件：\n" + "\n".join(lines))
 
         else:
-            send_telegram(chat_id, "看不懂這個指令，傳 /help 看說明")
+            if not first_contact:  # 第一次互動已經送過說明書，不用再回「看不懂」
+                send_telegram(chat_id, "看不懂這個指令，傳 /help 看說明")
 
-    OFFSET_FILE.write_text(json.dumps({"offset": offset}))
+    OFFSET_FILE.write_text(json.dumps({"offset": offset, "greeted": sorted(greeted)}))
     return changed
 
 
