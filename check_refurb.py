@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Apple 台灣整修品監控
-可設定多組監控目標，有新上架符合任一組條件的商品時，透過 Telegram Bot 通知。
+任何人都可以透過 Telegram 傳指令給 Bot，訂閱自己想要的監控條件。
 """
 import asyncio
 import json
 import os
 import re
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -15,14 +16,10 @@ from playwright.async_api import async_playwright
 
 URL = "https://www.apple.com/tw/shop/refurbished/mac"
 SEEN_FILE = Path("seen.json")
+SUBS_FILE = Path("subscriptions.json")
+OFFSET_FILE = Path("tg_offset.json")
 
-# 監控目標清單，可以設定多組。每組的 keywords 必須同時出現在標題裡才算符合
-# （Apple 標題會夾雜 \xa0 不斷行空格，比對前會先正規化），min_gb 是進一步到商品頁
-# 確認的最低儲存容量（GB），符合這個容量以上就算通過，不需要限制就設成 0
-TARGETS = [
-    {"keywords": ["13 吋", "MacBook Air", "M5"], "min_gb": 512},
-    {"keywords": ["13 吋", "MacBook Air", "M4"], "min_gb": 512},
-]
+MAX_TARGETS_PER_CHAT = 5
 
 # 商品頁上會出現的儲存容量標示，由大到小比對，比對到第一個出現的就當作該商品容量
 CAPACITY_SIZES_GB = [
@@ -31,46 +28,156 @@ CAPACITY_SIZES_GB = [
 ]
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
+HELP_TEXT = (
+    "🍎 Apple 整修品監控 Bot\n\n"
+    "指令：\n"
+    "/watch 關鍵字1,關鍵字2,... [min=容量GB]\n"
+    "  新增一組監控條件，商品標題要同時包含所有關鍵字才算符合\n"
+    "  例：/watch 13 吋,MacBook Air,M5 min=512\n\n"
+    "/list — 查看目前訂閱的條件\n"
+    "/unwatch 編號 — 移除一組條件（編號看 /list）\n"
+    "/help — 顯示這個說明\n\n"
+    f"每人最多可設定 {MAX_TARGETS_PER_CHAT} 組條件。"
+)
+
 
 def norm(s: str) -> str:
     """把不斷行空格換成一般空格，方便關鍵字比對"""
-    return s.replace("\xa0", " ").replace("\u2009", " ")
+    return s.replace("\xa0", " ").replace(" ", " ")
 
 
-def send_telegram(text: str):
-    if not TG_TOKEN or not TG_CHAT:
-        print("[warn] 未設定 Telegram 密鑰，略過通知")
+def send_telegram(chat_id: str, text: str):
+    if not TG_TOKEN or not chat_id:
+        print("[warn] 未設定 Telegram Bot Token 或 chat_id，略過通知")
         return
     api = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     payload = json.dumps({
-        "chat_id": TG_CHAT,
+        "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": False,
     }).encode()
     req = urllib.request.Request(
         api, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        print("[telegram]", r.status)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            print(f"[telegram] chat={chat_id} status={r.status}")
+    except Exception as e:
+        print(f"[warn] 發送給 {chat_id} 失敗: {e}")
 
 
-def check_min_capacity(url: str, min_gb: int) -> bool:
-    """抓商品詳細頁純 HTML，確認儲存容量是否達到 min_gb"""
+def get_updates(offset: int):
+    """拉取使用者傳給 Bot 的新訊息"""
+    if not TG_TOKEN:
+        return []
+    params = urllib.parse.urlencode({"offset": offset, "timeout": 0})
+    api = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?{params}"
+    try:
+        with urllib.request.urlopen(api, timeout=20) as r:
+            data = json.loads(r.read().decode())
+        return data.get("result", [])
+    except Exception as e:
+        print(f"[warn] 取得 Telegram 訊息失敗: {e}")
+        return []
+
+
+def parse_watch_args(text: str):
+    """解析 /watch 指令參數，回傳 (keywords, min_gb)，格式錯誤回傳 None"""
+    m = re.search(r"min\s*[:=]\s*(\d+)", text, re.I)
+    min_gb = int(m.group(1)) if m else 0
+    if m:
+        text = text[:m.start()] + text[m.end():]
+    keywords = [kw.strip() for kw in text.split(",") if kw.strip()]
+    if not keywords:
+        return None
+    return keywords, min_gb
+
+
+def process_commands(subs: dict) -> bool:
+    """處理使用者傳來的指令，原地更新 subs。回傳 subs 是否有變更。"""
+    offset = 0
+    if OFFSET_FILE.exists():
+        offset = json.loads(OFFSET_FILE.read_text()).get("offset", 0)
+
+    updates = get_updates(offset)
+    if not updates:
+        return False
+
+    changed = False
+    for u in updates:
+        offset = max(offset, u["update_id"] + 1)
+        msg = u.get("message") or {}
+        chat_id = str(msg.get("chat", {}).get("id", "") or "")
+        text = (msg.get("text") or "").strip()
+        if not chat_id or not text:
+            continue
+
+        if text in ("/start", "/help"):
+            send_telegram(chat_id, HELP_TEXT)
+
+        elif text.startswith("/watch"):
+            parsed = parse_watch_args(text[len("/watch"):].strip())
+            if not parsed:
+                send_telegram(chat_id, "格式錯誤，範例：\n/watch 13 吋,MacBook Air,M5 min=512")
+                continue
+            keywords, min_gb = parsed
+            targets = subs.setdefault(chat_id, [])
+            if len(targets) >= MAX_TARGETS_PER_CHAT:
+                send_telegram(chat_id, f"已達上限（{MAX_TARGETS_PER_CHAT} 組），請先用 /unwatch 移除一些")
+                continue
+            targets.append({"keywords": keywords, "min_gb": min_gb})
+            changed = True
+            suffix = f"（{min_gb}GB 以上）" if min_gb else ""
+            send_telegram(chat_id, f"✅ 已新增監控：{' + '.join(keywords)}{suffix}")
+
+        elif text.startswith("/unwatch"):
+            arg = text[len("/unwatch"):].strip()
+            targets = subs.get(chat_id, [])
+            if not arg.isdigit() or not (1 <= int(arg) <= len(targets)):
+                send_telegram(chat_id, "請提供正確編號，用 /list 查看")
+                continue
+            removed = targets.pop(int(arg) - 1)
+            changed = True
+            send_telegram(chat_id, f"🗑 已移除：{' + '.join(removed['keywords'])}")
+
+        elif text == "/list":
+            targets = subs.get(chat_id, [])
+            if not targets:
+                send_telegram(chat_id, "目前沒有訂閱任何條件，用 /watch 新增")
+            else:
+                lines = []
+                for i, t in enumerate(targets):
+                    suffix = f"（{t['min_gb']}GB 以上）" if t.get("min_gb") else ""
+                    lines.append(f"{i + 1}. {' + '.join(t['keywords'])}{suffix}")
+                send_telegram(chat_id, "目前訂閱的條件：\n" + "\n".join(lines))
+
+        else:
+            send_telegram(chat_id, "看不懂這個指令，傳 /help 看說明")
+
+    OFFSET_FILE.write_text(json.dumps({"offset": offset}))
+    return changed
+
+
+def get_capacity_gb(url: str, cache: dict):
+    """抓商品詳細頁純 HTML，取得儲存容量（GB），同一次執行內用 cache 避免重複下載"""
+    if url in cache:
+        return cache[url]
+    gb = None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=30) as r:
             html = r.read().decode("utf-8", "ignore").lower()
-        for label, gb in CAPACITY_SIZES_GB:
+        for label, size in CAPACITY_SIZES_GB:
             if label.lower() in html:
-                return gb >= min_gb
-        return True  # 抓不到容量標示，寧可通知，別漏掉
+                gb = size
+                break
     except Exception as e:
         print(f"[warn] 規格確認失敗 {url}: {e}")
-        return True  # 確認不了就寧可通知，別漏掉
+    cache[url] = gb
+    return gb
 
 
 async def fetch_products():
@@ -116,6 +223,13 @@ async def fetch_products():
 
 
 def main():
+    subs = {}
+    if SUBS_FILE.exists():
+        subs = json.loads(SUBS_FILE.read_text())
+
+    if process_commands(subs):
+        SUBS_FILE.write_text(json.dumps(subs, ensure_ascii=False, indent=2))
+
     products = asyncio.run(fetch_products())
     print(f"共取得 {len(products)} 項商品")
 
@@ -123,40 +237,50 @@ def main():
         print("[error] 沒抓到任何商品，頁面結構可能改了")
         sys.exit(1)  # 讓 workflow 變紅，GitHub 會寄失敗通知
 
-    seen = set()
+    seen_all = {}
     if SEEN_FILE.exists():
-        seen = set(json.loads(SEEN_FILE.read_text()))
+        seen_all = json.loads(SEEN_FILE.read_text())
 
-    matched_urls = set()
-    new_hits = []
-    for target in TARGETS:
-        keywords, min_gb = target["keywords"], target.get("min_gb", 0)
-        matches = [p for p in products
-                   if all(k in norm(p["title"]) for k in keywords)]
-        print(f"符合關鍵字 {keywords}：{len(matches)} 項")
-        matched_urls.update(m["url"] for m in matches)
+    capacity_cache = {}
+    any_notified = False
 
-        for m in matches:
-            if m["url"] in seen or m["url"] in [h["url"] for h in new_hits]:
-                continue
-            if min_gb and not check_min_capacity(m["url"], min_gb):
-                print(f"[skip] 容量不足 {min_gb}GB：{norm(m['title'])}")
-                continue
-            new_hits.append(m)
+    for chat_id, targets in subs.items():
+        seen = set(seen_all.get(chat_id, []))
+        matched_urls = set()
+        new_hits = []
 
-    for m in new_hits:
-        text = (f"🎯 Apple 整修品有貨了！\n\n"
-                f"{norm(m['title'])}\n"
-                f"價格：{m['price'] or '未知'}\n\n"
-                f"{m['url']}\n\n"
-                f"手刀下單，整修品通常很快售罄！")
-        send_telegram(text)
-        print("[notify]", norm(m["title"]))
+        for target in targets:
+            keywords, min_gb = target["keywords"], target.get("min_gb", 0)
+            matches = [p for p in products
+                       if all(k in norm(p["title"]) for k in keywords)]
+            matched_urls.update(m["url"] for m in matches)
 
-    # 更新 seen：只保留「目前還在架上」的，這樣售罄後再上架會重新通知
-    SEEN_FILE.write_text(json.dumps(sorted(matched_urls), ensure_ascii=False, indent=2))
+            for m in matches:
+                if m["url"] in seen or m["url"] in [h["url"] for h in new_hits]:
+                    continue
+                if min_gb:
+                    gb = get_capacity_gb(m["url"], capacity_cache)
+                    if gb is not None and gb < min_gb:
+                        continue
+                new_hits.append(m)
 
-    if not new_hits:
+        print(f"chat={chat_id} 符合 {len(matched_urls)} 項，新上架 {len(new_hits)} 項")
+
+        for m in new_hits:
+            text = (f"🎯 Apple 整修品有貨了！\n\n"
+                    f"{norm(m['title'])}\n"
+                    f"價格：{m['price'] or '未知'}\n\n"
+                    f"{m['url']}\n\n"
+                    f"手刀下單，整修品通常很快售罄！")
+            send_telegram(chat_id, text)
+            print(f"[notify] chat={chat_id} {norm(m['title'])}")
+            any_notified = True
+
+        seen_all[chat_id] = sorted(matched_urls)
+
+    SEEN_FILE.write_text(json.dumps(seen_all, ensure_ascii=False, indent=2))
+
+    if not any_notified:
         print("這次沒有新上架的目標商品")
 
 
