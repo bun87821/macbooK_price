@@ -1,0 +1,9 @@
+name = "refurb-bot"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 部署前先建立 KV namespace 並把 id 換成自己的：
+#   wrangler kv namespace create SUBS
+[[kv_namespaces]]
+binding = "SUBS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

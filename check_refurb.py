@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Apple 台灣整修品監控
-任何人都可以透過 Telegram 傳指令給 Bot，訂閱自己想要的監控條件。
+訂閱指令由 Cloudflare Worker（worker/）即時處理並存進 KV；
+這支腳本每 30 分鐘從 KV 讀訂閱清單、爬整修品頁面、發上架通知。
 """
 import asyncio
 import json
@@ -16,10 +17,7 @@ from playwright.async_api import async_playwright
 
 URL = "https://www.apple.com/tw/shop/refurbished/mac"
 SEEN_FILE = Path("seen.json")
-SUBS_FILE = Path("subscriptions.json")
-OFFSET_FILE = Path("tg_offset.json")
-
-MAX_TARGETS_PER_CHAT = 5
+SUBS_FILE = Path("subscriptions.json")  # KV 的快照，KV 讀不到時的備援
 
 # 商品頁上會出現的儲存容量標示，由大到小比對，比對到第一個出現的就當作該商品容量
 CAPACITY_SIZES_GB = [
@@ -29,38 +27,12 @@ CAPACITY_SIZES_GB = [
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
+CF_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")
+CF_KV_NAMESPACE_ID = os.environ.get("CF_KV_NAMESPACE_ID", "")
+CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "")
+
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-
-HELP_TEXT = (
-    "🍎 Apple 整修品監控 Bot\n\n"
-    "指令：\n"
-    "/watch 關鍵字1,關鍵字2,... [min=容量GB]\n"
-    "  新增一組監控條件，商品標題要同時包含所有關鍵字才算符合\n"
-    "  例：/watch 13 吋,MacBook Air,M5 min=512\n\n"
-    "/list — 查看目前訂閱的條件\n"
-    "/unwatch 編號 — 移除一組條件（編號看 /list）\n"
-    "/help — 顯示這個說明\n\n"
-    f"每人最多可設定 {MAX_TARGETS_PER_CHAT} 組條件。"
-)
-
-WELCOME_TEXT = (
-    "👋 歡迎使用 Apple 整修品監控 Bot！\n\n"
-    "這個 Bot 每 30 分鐘檢查一次 Apple 台灣官網的 Mac 整修品區，"
-    "有符合你條件的商品「新上架」時，會主動傳訊息通知你。\n\n"
-    "📖 快速上手：\n"
-    "1️⃣ 用 /watch 訂閱條件，關鍵字用逗號分隔，商品標題要同時包含所有關鍵字才算符合：\n"
-    "　　/watch 13 吋,MacBook Air,M5\n"
-    "2️⃣ 想限制最低容量就加上 min=容量GB：\n"
-    "　　/watch 13 吋,MacBook Air,M5 min=512\n"
-    "　　（512GB、1TB、2TB 都會通知，256GB 不會）\n"
-    "3️⃣ 用 /list 查看訂閱、/unwatch 編號 移除訂閱\n\n"
-    "💡 小提醒：\n"
-    f"• 每人最多 {MAX_TARGETS_PER_CHAT} 組條件\n"
-    "• 同一台商品只會通知一次，售罄下架後若再上架會重新通知\n"
-    "• 指令是排程處理的，回覆最多可能要等 30 分鐘，不是壞掉喔\n\n"
-    "隨時傳 /help 可以再看一次指令說明。"
-)
 
 
 def norm(s: str) -> str:
@@ -97,110 +69,53 @@ def send_telegram(chat_id: str, text: str):
         print(f"[warn] 發送給 {chat_id} 失敗: {e}")
 
 
-def get_updates(offset: int):
-    """拉取使用者傳給 Bot 的新訊息"""
-    if not TG_TOKEN:
-        return []
-    params = urllib.parse.urlencode({"offset": offset, "timeout": 0})
-    api = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?{params}"
+def kv_request(path: str, method: str = "GET", data: bytes = None) -> str:
+    base = (f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+            f"/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}")
+    req = urllib.request.Request(
+        base + path, data=data, method=method,
+        headers={"Authorization": f"Bearer {CF_API_TOKEN}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode()
+
+
+def load_subscriptions() -> dict:
+    """從 Cloudflare KV 讀訂閱清單（Worker 即時寫入的），回傳 {chat_id: targets}。
+    KV 讀不到就退回 repo 裡的快照；KV 還是空的（剛部署）就用快照把舊訂閱者搬進去。"""
+    snapshot = {}
+    if SUBS_FILE.exists():
+        snapshot = json.loads(SUBS_FILE.read_text())
+
+    if not (CF_ACCOUNT_ID and CF_KV_NAMESPACE_ID and CF_API_TOKEN):
+        print("[warn] 未設定 Cloudflare KV 密鑰，改用 repo 快照")
+        return snapshot
+
     try:
-        with urllib.request.urlopen(api, timeout=20) as r:
-            data = json.loads(r.read().decode())
-        return data.get("result", [])
+        keys = json.loads(kv_request("/keys?prefix=chat:&limit=1000"))["result"]
+
+        if not keys and snapshot:
+            print("[info] KV 是空的，把快照裡的舊訂閱者搬進 KV")
+            for cid, targets in snapshot.items():
+                body = json.dumps(
+                    {"greeted": True, "targets": targets},
+                    ensure_ascii=False).encode()
+                kv_request(f"/values/chat:{cid}", method="PUT", data=body)
+            return snapshot
+
+        subs = {}
+        for k in keys:
+            name = k["name"]
+            chat = json.loads(kv_request("/values/" + urllib.parse.quote(name)))
+            targets = chat.get("targets", [])
+            if targets:
+                subs[name.removeprefix("chat:")] = targets
+
+        # 寫回快照：備援用，也方便直接在 repo 看目前有哪些訂閱
+        SUBS_FILE.write_text(json.dumps(subs, ensure_ascii=False, indent=2))
+        return subs
     except Exception as e:
-        print(f"[warn] 取得 Telegram 訊息失敗: {e}")
-        return []
-
-
-def parse_watch_args(text: str):
-    """解析 /watch 指令參數，回傳 (keywords, min_gb)，格式錯誤回傳 None"""
-    m = re.search(r"min\s*[:=]\s*(\d+)", text, re.I)
-    min_gb = int(m.group(1)) if m else 0
-    if m:
-        text = text[:m.start()] + text[m.end():]
-    keywords = [kw.strip() for kw in text.split(",") if kw.strip()]
-    if not keywords:
-        return None
-    return keywords, min_gb
-
-
-def process_commands(subs: dict) -> bool:
-    """處理使用者傳來的指令，原地更新 subs。回傳 subs 是否有變更。"""
-    state = {}
-    if OFFSET_FILE.exists():
-        state = json.loads(OFFSET_FILE.read_text())
-    offset = state.get("offset", 0)
-    greeted = set(state.get("greeted", []))
-
-    updates = get_updates(offset)
-    if not updates:
-        return False
-
-    changed = False
-    for u in updates:
-        offset = max(offset, u["update_id"] + 1)
-        msg = u.get("message") or {}
-        chat_id = str(msg.get("chat", {}).get("id", "") or "")
-        text = (msg.get("text") or "").strip()
-        if not chat_id or not text:
-            continue
-
-        # 第一次互動的人，不管傳什麼都先送一份使用說明書
-        first_contact = chat_id not in greeted
-        if first_contact:
-            greeted.add(chat_id)
-            send_telegram(chat_id, WELCOME_TEXT)
-
-        if text in ("/start", "/help"):
-            if not first_contact:  # 剛剛才送過說明書就不重複
-                send_telegram(chat_id, HELP_TEXT)
-
-        elif text.startswith("/watch"):
-            parsed = parse_watch_args(text[len("/watch"):].strip())
-            if not parsed:
-                send_telegram(chat_id, "格式錯誤，範例：\n/watch 13 吋,MacBook Air,M5 min=512")
-                continue
-            keywords, min_gb = parsed
-            targets = subs.setdefault(chat_id, [])
-            if any(t["keywords"] == keywords and t.get("min_gb", 0) == min_gb
-                   for t in targets):
-                send_telegram(chat_id, "這組條件已經訂閱過了，用 /list 查看")
-                continue
-            if len(targets) >= MAX_TARGETS_PER_CHAT:
-                send_telegram(chat_id, f"已達上限（{MAX_TARGETS_PER_CHAT} 組），請先用 /unwatch 移除一些")
-                continue
-            targets.append({"keywords": keywords, "min_gb": min_gb})
-            changed = True
-            suffix = f"（{min_gb}GB 以上）" if min_gb else ""
-            send_telegram(chat_id, f"✅ 已新增監控：{' + '.join(keywords)}{suffix}")
-
-        elif text.startswith("/unwatch"):
-            arg = text[len("/unwatch"):].strip()
-            targets = subs.get(chat_id, [])
-            if not arg.isdigit() or not (1 <= int(arg) <= len(targets)):
-                send_telegram(chat_id, "請提供正確編號，用 /list 查看")
-                continue
-            removed = targets.pop(int(arg) - 1)
-            changed = True
-            send_telegram(chat_id, f"🗑 已移除：{' + '.join(removed['keywords'])}")
-
-        elif text == "/list":
-            targets = subs.get(chat_id, [])
-            if not targets:
-                send_telegram(chat_id, "目前沒有訂閱任何條件，用 /watch 新增")
-            else:
-                lines = []
-                for i, t in enumerate(targets):
-                    suffix = f"（{t['min_gb']}GB 以上）" if t.get("min_gb") else ""
-                    lines.append(f"{i + 1}. {' + '.join(t['keywords'])}{suffix}")
-                send_telegram(chat_id, "目前訂閱的條件：\n" + "\n".join(lines))
-
-        else:
-            if not first_contact:  # 第一次互動已經送過說明書，不用再回「看不懂」
-                send_telegram(chat_id, "看不懂這個指令，傳 /help 看說明")
-
-    OFFSET_FILE.write_text(json.dumps({"offset": offset, "greeted": sorted(greeted)}))
-    return changed
+        print(f"[warn] 讀取 KV 失敗（{e}），改用 repo 快照")
+        return snapshot
 
 
 def get_capacity_gb(url: str, cache: dict):
@@ -265,12 +180,8 @@ async def fetch_products():
 
 
 def main():
-    subs = {}
-    if SUBS_FILE.exists():
-        subs = json.loads(SUBS_FILE.read_text())
-
-    if process_commands(subs):
-        SUBS_FILE.write_text(json.dumps(subs, ensure_ascii=False, indent=2))
+    subs = load_subscriptions()
+    print(f"訂閱者共 {len(subs)} 人")
 
     products = asyncio.run(fetch_products())
     print(f"共取得 {len(products)} 項商品")
