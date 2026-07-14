@@ -1,4 +1,40 @@
 {
+  "5184782634": [
+    {
+      "keywords": [
+        "13吋",
+        "MacBook Air",
+        "M5"
+      ],
+      "min_gb": 0
+    },
+    {
+      "keywords": [
+        "15吋",
+        "MacBook Air",
+        "M5"
+      ],
+      "min_gb": 0
+    }
+  ],
+  "5612113840": [
+    {
+      "keywords": [
+        "13 吋",
+        "MacBook Air",
+        "M5"
+      ],
+      "min_gb": 5
+    },
+    {
+      "keywords": [
+        "14吋",
+        "MacBook pro",
+        "M5"
+      ],
+      "min_gb": 512
+    }
+  ],
   "6922810979": [
     {
       "keywords": [
