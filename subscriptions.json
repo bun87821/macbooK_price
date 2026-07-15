@@ -1,7 +1,33 @@
 {
+  "444409647": [
+    {
+      "keywords": [
+        "macbook air"
+      ],
+      "min_gb": 0
+    }
+  ],
   "964064119": [
     {
       "keywords": [
+        "MacBook Air",
+        "M5"
+      ],
+      "min_gb": 0
+    }
+  ],
+  "1043139367": [
+    {
+      "keywords": [
+        "13 吋",
+        "MacBook Air",
+        "M5"
+      ],
+      "min_gb": 0
+    },
+    {
+      "keywords": [
+        "15 吋",
         "MacBook Air",
         "M5"
       ],
@@ -77,6 +103,46 @@
         "M5"
       ],
       "min_gb": 512
+    }
+  ],
+  "5908164450": [
+    {
+      "keywords": [
+        "Mac mini",
+        "M4 Pro"
+      ],
+      "min_gb": 512
+    },
+    {
+      "keywords": [
+        "Mac Studio",
+        "M4 Max",
+        "40 核心 GPU"
+      ],
+      "min_gb": 1024
+    },
+    {
+      "keywords": [
+        "Mac Studio",
+        "M3 Ultra"
+      ],
+      "min_gb": 1024
+    },
+    {
+      "keywords": [
+        "MacBook Pro",
+        "M4 Max",
+        "40 核心 GPU"
+      ],
+      "min_gb": 1024
+    },
+    {
+      "keywords": [
+        "MacBook Pro",
+        "M5 Max",
+        "40 核心 GPU"
+      ],
+      "min_gb": 1024
     }
   ],
   "6922810979": [
