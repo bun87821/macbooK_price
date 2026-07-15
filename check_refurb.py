@@ -44,8 +44,11 @@ def match_key(s: str) -> str:
 
 
 def title_matches(title: str, keywords: list) -> bool:
+    """關鍵字裡的空格視為「而且」：「MacBook Air M5」拆成三個詞分別比對，
+    才能對到官網標題「MacBook Air Apple M5」這種中間插字的寫法"""
     key = match_key(title)
-    return all(match_key(k) in key for k in keywords)
+    return all(match_key(token) in key
+               for k in keywords for token in norm(k).split())
 
 
 def send_telegram(chat_id: str, text: str):
