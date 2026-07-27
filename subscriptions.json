@@ -160,6 +160,20 @@
       "min_gb": 1024
     }
   ],
+  "6096313853": [
+    {
+      "keywords": [
+        "Mac mini"
+      ],
+      "min_gb": 0
+    },
+    {
+      "keywords": [
+        "MacBook Air"
+      ],
+      "min_gb": 0
+    }
+  ],
   "6467904314": [
     {
       "keywords": [
