@@ -22,6 +22,24 @@
       "min_gb": 0
     }
   ],
+  "1013864592": [
+    {
+      "keywords": [
+        "14 吋",
+        "MacBook Pro",
+        "M5"
+      ],
+      "min_gb": 512
+    },
+    {
+      "keywords": [
+        "14 吋",
+        "MacBook Pro",
+        "M4"
+      ],
+      "min_gb": 512
+    }
+  ],
   "1043139367": [
     {
       "keywords": [
