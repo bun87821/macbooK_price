@@ -16,8 +16,13 @@
   "964064119": [
     {
       "keywords": [
-        "MacBook Air",
-        "M5"
+        "Macbook Air M5 24GB 512GB"
+      ],
+      "min_gb": 0
+    },
+    {
+      "keywords": [
+        "Mac mini M5 24GB 512GB"
       ],
       "min_gb": 0
     }
