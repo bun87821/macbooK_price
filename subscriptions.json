@@ -146,6 +146,13 @@
         "MacBook Pro"
       ],
       "min_gb": 48
+    },
+    {
+      "keywords": [
+        "mac mini",
+        "M6"
+      ],
+      "min_gb": 0
     }
   ],
   "5612113840": [
